@@ -1,0 +1,10 @@
+{
+  "name": "cgpa-calc-repo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix cgpa-calc-next/cgpa-calc-next run dev",
+    "build": "npm --prefix cgpa-calc-next/cgpa-calc-next run build",
+    "start": "npm --prefix cgpa-calc-next/cgpa-calc-next run start"
+  }
+}

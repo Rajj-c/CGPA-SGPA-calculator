@@ -6,9 +6,10 @@ import { getGradePoint, getGradeOptions, getRegulationDetails } from '../utils/g
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { Trash2, Plus, Download, Moon, Sun, Save, Info, Upload, FileDown, AlertTriangle, Loader2 } from 'lucide-react';
+import { Trash2, Plus, Download, Moon, Sun, Save, Info, Upload, FileDown, AlertTriangle, Loader2, Clipboard, FileText, Sparkles, Pencil, Check } from 'lucide-react';
 import Link from 'next/link';
 import html2canvas from 'html2canvas';
+import { parsePastedGradeText } from '../utils/textGradeParser';
 
 export default function Calculator() {
     const [activeTab, setActiveTab] = useState('sgpa');
@@ -24,6 +25,12 @@ export default function Calculator() {
     const [showPreviewModal, setShowPreviewModal] = useState(false);
     const [extractedData, setExtractedData] = useState(null);
     const [isDragging, setIsDragging] = useState(false);
+
+    // Paste Grade Text State
+    const [showPasteModal, setShowPasteModal] = useState(false);
+    const [pastedText, setPastedText] = useState('');
+    const [isParsingText, setIsParsingText] = useState(false);
+    const [pasteError, setPasteError] = useState('');
 
     // Data State
     const [studentName, setStudentName] = useState('');
@@ -491,6 +498,108 @@ export default function Calculator() {
         await processFiles(files);
     };
 
+    const handlePasteFromClipboard = async () => {
+        try {
+            if (navigator.clipboard && navigator.clipboard.readText) {
+                const clipText = await navigator.clipboard.readText();
+                if (clipText) {
+                    setPastedText(clipText);
+                    setPasteError('');
+                }
+            } else {
+                alert('Clipboard access not available. Please paste text directly into the text box using Ctrl+V or Cmd+V.');
+            }
+        } catch (err) {
+            console.error('Clipboard read error:', err);
+            alert('Could not read clipboard automatically. Please paste your text manually into the box.');
+        }
+    };
+
+    const handleParsePastedText = async () => {
+        if (!pastedText || !pastedText.trim()) {
+            setPasteError('Please paste your grade card text first.');
+            return;
+        }
+
+        setIsParsingText(true);
+        setPasteError('');
+
+        try {
+            // First try Gemini AI API parsing
+            const response = await fetch('/api/parse-pasted-grades', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: pastedText }),
+            });
+
+            const result = await response.json();
+            let dataToUse = null;
+
+            if (response.ok && result.data && result.data.semesters && result.data.semesters.length > 0) {
+                dataToUse = result.data;
+            } else {
+                // Fallback to client-side smart parser
+                console.log('AI parsing returned no structured semesters or failed. Trying client-side parser fallback.');
+                dataToUse = parsePastedGradeText(pastedText);
+            }
+
+            if (dataToUse && dataToUse.semesters && dataToUse.semesters.length > 0) {
+                setExtractedData(dataToUse);
+                setShowPasteModal(false);
+                setShowPreviewModal(true);
+            } else {
+                setPasteError('Could not detect valid course entries in the pasted text. Make sure your text includes course codes, titles, credits, and letter grades.');
+            }
+        } catch (err) {
+            console.error('Error parsing pasted text:', err);
+            // Local fallback attempt
+            const fallbackData = parsePastedGradeText(pastedText);
+            if (fallbackData && fallbackData.semesters && fallbackData.semesters.length > 0) {
+                setExtractedData(fallbackData);
+                setShowPasteModal(false);
+                setShowPreviewModal(true);
+            } else {
+                setPasteError(`Unable to parse grade card. Error: ${err.message}`);
+            }
+        } finally {
+            setIsParsingText(false);
+        }
+    };
+
+    const handleExtractedCourseChange = (semIdx, courseIdx, field, value) => {
+        const updatedData = { ...extractedData };
+        updatedData.semesters = [...updatedData.semesters];
+        updatedData.semesters[semIdx] = { ...updatedData.semesters[semIdx] };
+        updatedData.semesters[semIdx].courses = [...updatedData.semesters[semIdx].courses];
+
+        if (field === 'credits') {
+            updatedData.semesters[semIdx].courses[courseIdx] = {
+                ...updatedData.semesters[semIdx].courses[courseIdx],
+                credits: value === '' ? '' : parseFloat(value)
+            };
+        } else {
+            updatedData.semesters[semIdx].courses[courseIdx] = {
+                ...updatedData.semesters[semIdx].courses[courseIdx],
+                [field]: value
+            };
+        }
+
+        setExtractedData(updatedData);
+    };
+
+    const handleExtractedCourseRemove = (semIdx, courseIdx) => {
+        const updatedData = { ...extractedData };
+        updatedData.semesters = [...updatedData.semesters];
+        updatedData.semesters[semIdx] = { ...updatedData.semesters[semIdx] };
+        updatedData.semesters[semIdx].courses = updatedData.semesters[semIdx].courses.filter((_, idx) => idx !== courseIdx);
+
+        if (updatedData.semesters[semIdx].courses.length === 0) {
+            updatedData.semesters = updatedData.semesters.filter((_, idx) => idx !== semIdx);
+        }
+
+        setExtractedData(updatedData);
+    };
+
     const generatePDF = async () => {
         if (!studentName || !regNo) {
             alert("Please enter your Name and Register Number to download the report.");
@@ -773,8 +882,8 @@ export default function Calculator() {
                                 <input type="text" value={regNo} onChange={(e) => setRegNo(e.target.value)} className="w-full mt-1 p-2 rounded-lg bg-white/50 dark:bg-slate-700/50 border border-white/30 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="992xxxxxxxx" />
                             </div>
 
-                            {/* Import Grade Card Button */}
-                            <div className="pt-2">
+                            {/* Import Grade Card Buttons */}
+                            <div className="pt-2 space-y-2">
                                 <label
                                     className={`relative flex flex-col items-center justify-center w-full py-4 border-2 border-dashed rounded-xl cursor-pointer transition shadow-sm overflow-hidden group ${isDragging
                                         ? 'border-blue-500 bg-blue-100/80 dark:bg-blue-800/40 scale-[1.02]'
@@ -807,6 +916,15 @@ export default function Calculator() {
                                     )}
                                     <input type="file" accept="image/*" multiple onChange={handleFileUpload} disabled={isUploading} className="hidden" />
                                 </label>
+
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPasteModal(true)}
+                                    className="w-full py-2.5 px-3 rounded-xl bg-purple-50 hover:bg-purple-100 dark:bg-purple-900/20 dark:hover:bg-purple-900/40 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 font-bold text-xs flex items-center justify-center gap-2 transition shadow-sm"
+                                >
+                                    <Clipboard size={16} />
+                                    📋 Copy & Paste Grade Card Text
+                                </button>
                             </div>
                         </div>
 
@@ -1038,33 +1156,43 @@ export default function Calculator() {
                                     </button>
                                 </div>
 
-                                {/* Import Grade Card Button (Moved Here) */}
-                                <div className="mt-4 pt-4 border-t border-white/20">
-                                    <div className="relative">
-                                        <input
-                                            type="file"
-                                            id="gradeCardUpload"
-                                            accept="image/png,image/jpeg,image/jpg,application/pdf"
-                                            onChange={handleFileUpload}
-                                            className="hidden"
-                                            disabled={isUploading}
-                                            multiple
-                                        />
-                                        <label
-                                            htmlFor="gradeCardUpload"
-                                            className={`flex items-center justify-center gap-2 p-3 rounded-lg font-bold transition-all cursor-pointer ${isUploading
-                                                ? 'bg-gray-400 cursor-not-allowed'
-                                                : 'bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95'
-                                                }`}
+                                {/* Import Grade Card Options */}
+                                <div className="mt-4 pt-4 border-t border-white/20 space-y-3">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <div className="relative">
+                                            <input
+                                                type="file"
+                                                id="gradeCardUpload"
+                                                accept="image/png,image/jpeg,image/jpg,application/pdf"
+                                                onChange={handleFileUpload}
+                                                className="hidden"
+                                                disabled={isUploading}
+                                                multiple
+                                            />
+                                            <label
+                                                htmlFor="gradeCardUpload"
+                                                className={`flex items-center justify-center gap-2 p-3 rounded-xl font-bold text-xs transition-all cursor-pointer ${isUploading
+                                                    ? 'bg-gray-400 cursor-not-allowed'
+                                                    : 'bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95'
+                                                    }`}
+                                            >
+                                                <Upload size={16} />
+                                                {isUploading ? 'Processing...' : '📄 Upload Screenshot / PDF'}
+                                            </label>
+                                        </div>
+
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowPasteModal(true)}
+                                            className="flex items-center justify-center gap-2 p-3 rounded-xl font-bold text-xs bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95 transition-all cursor-pointer"
                                         >
-                                            <Upload size={20} />
-                                            {isUploading ? 'Processing...' : '📄 Import Grade Card(s) (AI)'}
-                                        </label>
-                                        <p className="text-xs text-center mt-2 opacity-60">
-                                            Have a <strong>PDF</strong> or multiple screenshots? <br />
-                                            <span className="font-bold text-purple-600 dark:text-purple-400">Select all files at once!</span>
-                                        </p>
+                                            <Clipboard size={16} />
+                                            📋 Paste Grade Card Text
+                                        </button>
                                     </div>
+                                    <p className="text-xs text-center opacity-60">
+                                        Upload grade card screenshots/PDF <strong>OR</strong> paste copied text to auto-organize & calculate!
+                                    </p>
                                 </div>
 
                                 {/* Semester History in SGPA Tab */}
@@ -1337,6 +1465,102 @@ export default function Calculator() {
                 </div>
             </div >
 
+            {/* Paste Grade Card Modal */}
+            {showPasteModal && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-300">
+                    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-2xl w-full p-6 animate-in zoom-in duration-300 flex flex-col space-y-4 max-h-[90vh] overflow-y-auto">
+                        <div className="flex justify-between items-center pb-3 border-b border-gray-200 dark:border-slate-700">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-600 text-white flex items-center justify-center font-bold shadow-md">
+                                    📋
+                                </div>
+                                <div>
+                                    <h2 className="text-xl font-black text-slate-800 dark:text-white">Paste Grade Card Text</h2>
+                                    <p className="text-xs text-slate-500 dark:text-slate-400">Copy text from your SIS portal / transcript and paste below</p>
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => { setShowPasteModal(false); setPasteError(''); }}
+                                className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="space-y-2">
+                            <div className="flex justify-between items-center">
+                                <label className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                                    Pasted Transcript / Grade Card Text
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={handlePasteFromClipboard}
+                                    className="text-xs font-bold text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-1 cursor-pointer"
+                                >
+                                    <Clipboard size={14} /> Paste from Clipboard
+                                </button>
+                            </div>
+                            <textarea
+                                rows={8}
+                                value={pastedText}
+                                onChange={(e) => { setPastedText(e.target.value); setPasteError(''); }}
+                                placeholder={`Paste grade card text here, e.g.:
+
+Semester 1
+211BIT1101 Biology for Engineers 3.0 C
+211CSE1001 Python Programming 4.0 S
+211MAT1001 Engineering Mathematics 4.0 A
+
+Semester 2
+211CSE2001 Data Structures 4.0 S
+...`}
+                                className="w-full p-3 rounded-xl bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-700 text-xs font-mono focus:ring-2 focus:ring-purple-500 outline-none resize-y"
+                            />
+                        </div>
+
+                        {pasteError && (
+                            <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl text-xs text-red-600 dark:text-red-300 flex items-center gap-2">
+                                <AlertTriangle size={16} className="shrink-0" />
+                                <span>{pasteError}</span>
+                            </div>
+                        )}
+
+                        <div className="bg-purple-50 dark:bg-purple-900/20 p-3 rounded-xl border border-purple-100 dark:border-purple-800/40 text-xs text-purple-800 dark:text-purple-200 space-y-1">
+                            <p className="font-bold flex items-center gap-1">✨ How it works:</p>
+                            <p>1. Select and copy all text from your grade card or PDF transcript.</p>
+                            <p>2. Paste it above — Gemini AI & Smart Parser will extract course codes, credits, grades & organize semesters automatically!</p>
+                        </div>
+
+                        <div className="flex gap-3 pt-2">
+                            <button
+                                type="button"
+                                onClick={() => { setPastedText(''); setPasteError(''); }}
+                                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-xl font-bold text-xs transition"
+                            >
+                                Clear
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleParsePastedText}
+                                disabled={isParsingText}
+                                className="flex-1 py-2.5 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white rounded-xl font-bold text-xs shadow-lg flex items-center justify-center gap-2 transition disabled:opacity-50 cursor-pointer"
+                            >
+                                {isParsingText ? (
+                                    <>
+                                        <Loader2 className="animate-spin" size={16} />
+                                        <span>Organizing Grades with AI...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <span>✨ Organize & Calculate Grades</span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Grade Card Preview Modal */}
             {
                 showPreviewModal && extractedData && (
@@ -1354,10 +1578,16 @@ export default function Calculator() {
 
                             <div className="p-6 space-y-6 overflow-y-auto">
                                 {/* Student Info */}
-                                {extractedData.studentName && (
+                                {extractedData.studentName !== undefined && (
                                     <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-200 dark:border-blue-800">
-                                        <h3 className="font-bold text-blue-800 dark:text-blue-300 text-sm uppercase tracking-wider mb-1">Student Details</h3>
-                                        <div className="text-lg font-bold">{extractedData.studentName}</div>
+                                        <h3 className="font-bold text-blue-800 dark:text-blue-300 text-xs uppercase tracking-wider mb-1">Student Details</h3>
+                                        <input
+                                            type="text"
+                                            value={extractedData.studentName || ''}
+                                            onChange={(e) => setExtractedData({ ...extractedData, studentName: e.target.value })}
+                                            className="w-full max-w-md p-1 rounded bg-transparent hover:bg-blue-100/50 dark:hover:bg-blue-900/30 focus:bg-white dark:focus:bg-slate-900 border border-transparent focus:border-blue-500 text-base font-bold outline-none transition"
+                                            placeholder="Student Name"
+                                        />
                                     </div>
                                 )}
 
@@ -1380,19 +1610,63 @@ export default function Calculator() {
                                                 <table className="w-full text-sm text-left">
                                                     <thead className="bg-slate-100 dark:bg-slate-700 text-xs uppercase font-bold text-slate-500 dark:text-slate-400">
                                                         <tr>
-                                                            <th className="px-4 py-2 rounded-l-lg">Code</th>
+                                                            <th className="px-4 py-2 rounded-l-lg w-28">Code</th>
                                                             <th className="px-4 py-2">Course Name</th>
-                                                            <th className="px-4 py-2">Credits</th>
-                                                            <th className="px-4 py-2 rounded-r-lg">Grade</th>
+                                                            <th className="px-4 py-2 w-20 text-center">Credits</th>
+                                                            <th className="px-4 py-2 w-24">Grade</th>
+                                                            <th className="px-4 py-2 rounded-r-lg w-12 text-center">Action</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
                                                         {sem.courses?.map((course, idx) => (
                                                             <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                                                                <td className="px-4 py-2 font-mono text-xs opacity-70">{course.code}</td>
-                                                                <td className="px-4 py-2 font-medium">{course.name}</td>
-                                                                <td className="px-4 py-2">{course.credits}</td>
-                                                                <td className="px-4 py-2 font-bold text-purple-600 dark:text-purple-400">{course.grade}</td>
+                                                                <td className="px-4 py-1.5 font-mono text-xs opacity-70">
+                                                                    <input
+                                                                        type="text"
+                                                                        value={course.code || ''}
+                                                                        onChange={(e) => handleExtractedCourseChange(semIdx, idx, 'code', e.target.value)}
+                                                                        className="w-full p-1 rounded bg-transparent hover:bg-slate-100 dark:hover:bg-slate-700/50 focus:bg-white dark:focus:bg-slate-900 border border-transparent focus:border-purple-500 text-xs font-mono outline-none transition"
+                                                                    />
+                                                                </td>
+                                                                <td className="px-4 py-1.5 font-medium">
+                                                                    <input
+                                                                        type="text"
+                                                                        value={course.name || ''}
+                                                                        onChange={(e) => handleExtractedCourseChange(semIdx, idx, 'name', e.target.value)}
+                                                                        className="w-full p-1 rounded bg-transparent hover:bg-slate-100 dark:hover:bg-slate-700/50 focus:bg-white dark:focus:bg-slate-900 border border-transparent focus:border-purple-500 text-xs outline-none transition"
+                                                                    />
+                                                                </td>
+                                                                <td className="px-4 py-1.5">
+                                                                    <input
+                                                                        type="number"
+                                                                        step="0.5"
+                                                                        min="0"
+                                                                        max="10"
+                                                                        value={course.credits}
+                                                                        onChange={(e) => handleExtractedCourseChange(semIdx, idx, 'credits', e.target.value)}
+                                                                        className="w-full p-1 rounded bg-transparent hover:bg-slate-100 dark:hover:bg-slate-700/50 focus:bg-white dark:focus:bg-slate-900 border border-transparent focus:border-purple-500 text-xs outline-none transition text-center"
+                                                                    />
+                                                                </td>
+                                                                <td className="px-4 py-1.5 font-bold text-purple-600 dark:text-purple-400">
+                                                                    <select
+                                                                        value={course.grade}
+                                                                        onChange={(e) => handleExtractedCourseChange(semIdx, idx, 'grade', e.target.value)}
+                                                                        className="w-full p-1 rounded bg-transparent hover:bg-slate-100 dark:hover:bg-slate-700/50 focus:bg-white dark:focus:bg-slate-900 border border-transparent focus:border-purple-500 text-xs font-bold outline-none cursor-pointer transition appearance-none"
+                                                                    >
+                                                                        {getGradeOptions(regulation).map(g => (
+                                                                            <option key={g} value={g}>{g}</option>
+                                                                        ))}
+                                                                    </select>
+                                                                </td>
+                                                                <td className="px-4 py-1.5 text-center">
+                                                                    <button
+                                                                        onClick={() => handleExtractedCourseRemove(semIdx, idx)}
+                                                                        className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition cursor-pointer"
+                                                                        title="Remove course"
+                                                                    >
+                                                                        <Trash2 size={14} />
+                                                                    </button>
+                                                                </td>
                                                             </tr>
                                                         ))}
                                                     </tbody>
@@ -1403,11 +1677,19 @@ export default function Calculator() {
                                 </div>
 
                                 {/* Summary */}
-                                {extractedData.totalCGPA && (
+                                {extractedData.totalCGPA !== undefined && extractedData.totalCGPA !== null && (
                                     <div className="flex justify-end">
-                                        <div className="bg-green-100 dark:bg-green-900/30 px-6 py-4 rounded-xl border border-green-200 dark:border-green-800 text-center">
-                                            <div className="text-xs font-bold uppercase text-green-700 dark:text-green-400 tracking-wider">Detected CGPA</div>
-                                            <div className="text-3xl font-black text-green-800 dark:text-green-300">{extractedData.totalCGPA}</div>
+                                        <div className="bg-green-100 dark:bg-green-900/30 px-6 py-3 rounded-xl border border-green-200 dark:border-green-800 text-center flex flex-col items-center">
+                                            <div className="text-xs font-bold uppercase text-green-700 dark:text-green-400 tracking-wider mb-1">Detected CGPA</div>
+                                            <input
+                                                type="number"
+                                                step="0.01"
+                                                min="0"
+                                                max="10"
+                                                value={extractedData.totalCGPA || ''}
+                                                onChange={(e) => setExtractedData({ ...extractedData, totalCGPA: e.target.value === '' ? null : parseFloat(e.target.value) })}
+                                                className="w-20 p-1 rounded bg-transparent hover:bg-green-200/50 dark:hover:bg-green-900/50 focus:bg-white dark:focus:bg-slate-900 border border-transparent focus:border-green-500 text-2xl font-black text-center outline-none transition"
+                                            />
                                         </div>
                                     </div>
                                 )}
@@ -1419,7 +1701,7 @@ export default function Calculator() {
                                 <div className="text-sm text-orange-800 dark:text-orange-200">
                                     <strong>Important:</strong> Please verify all course codes, credits, and grades above.
                                     <br />
-                                    If any data is incorrect, you can <strong>edit it in the calculator</strong> after importing, before downloading your report.
+                                    You can <strong>edit any field directly in this preview table</strong> or delete lines before importing.
                                 </div>
                             </div>
 
